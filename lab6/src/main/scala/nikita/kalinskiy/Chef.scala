@@ -2,24 +2,25 @@ package nikita.kalinskiy
 
 import akka.actor.typed.scaladsl.Behaviors
 import akka.actor.typed.{ActorRef, Behavior}
+import akka.util.Timeout
 import nikita.kalinskiy.Waiter.ServeOrder
 
 import scala.concurrent.duration._
-import scala.util.Random
+import scala.util.{Failure, Success}
 
 object Chef {
 
   sealed trait Command
 
   case class TakeOrder(
-                        order: Order,
-                        replyTo: ActorRef[Result],
-                        waiter: ActorRef[Waiter.Command],
-                        customer: ActorRef[Customer.Eat.type]
-                      ) extends Command
+      order: Order,
+      replyTo: ActorRef[Result],
+      waiter: ActorRef[Waiter.Command],
+      customer: ActorRef[Customer.Eat.type]
+  ) extends Command
 
   case class FinishOrder(orderId: Int, waiter: ActorRef[Waiter.Command], customer: ActorRef[Customer.Eat.type])
-    extends Command
+      extends Command
 
   sealed trait State
 
@@ -27,47 +28,70 @@ object Chef {
 
   case object Cooking extends State
 
-  def apply(): Behavior[Command] = withState(Free)
+  private case class WrappedRandomResponse(
+      newTotalCookTime: Double,
+      order: Order,
+      waiter: ActorRef[Waiter.Command],
+      customer: ActorRef[Customer.Eat.type]
+  ) extends Command
+  private case object WrappedRandomException extends Command
 
-  def withState(state: State): Behavior[Command] = Behaviors.receive { (ctx, msg) =>
-    def decideOnCookingTime(order: Order): Double = {
-      order.dishes.foldLeft(0.0) { (totalTime, khinkali) =>
-        khinkali.stuffing match {
-          case Stuffing.Beef =>
-            val beefTimeRange = Settings.beefTimeRange
-            totalTime + randomCookingTime(beefTimeRange) * khinkali.amount
-          case Stuffing.Mutton =>
-            val muttonTimeRange = Settings.muttonTimeRange
-            totalTime + randomCookingTime(muttonTimeRange) * khinkali.amount
-          case Stuffing.CheeseAndMushrooms =>
-            val cheeseAndMushroomsTimeRange = Settings.cheeseAndMushroomsTimeRange
-            totalTime + randomCookingTime(cheeseAndMushroomsTimeRange) * khinkali.amount
+  implicit val timeout: Timeout = 1.second
+
+  def apply(random: ActorRef[RandomGenerator.Command], config: ChefConfig): Behavior[Command] =
+    withState(Free, random, config)
+
+  def withState(state: State, random: ActorRef[RandomGenerator.Command], config: ChefConfig): Behavior[Command] =
+    Behaviors.setup { ctx =>
+      def decideOnCookingTime(
+          order: Order,
+          totalCookTime: Double,
+          waiter: ActorRef[Waiter.Command],
+          customer: ActorRef[Customer.Eat.type]
+      ): Unit = {
+        for (khinkaly <- order.dishes) {
+          val (minTime, maxTime) = khinkaly.stuffing match {
+            case Stuffing.Beef               => config.getBeefTime
+            case Stuffing.Mutton             => config.getMuttonTime
+            case Stuffing.CheeseAndMushrooms => config.getCheeseAndMushroomsTime
+          }
+          ctx.ask(random, (ref: ActorRef[Double]) => RandomGenerator.Command.GenerateDouble(minTime, maxTime, ref)) {
+            case Success(value) =>
+              val remainedOrder = Order(order.orderId, order.dishes.tail)
+              WrappedRandomResponse(totalCookTime + value * khinkaly.amount, remainedOrder, waiter, customer)
+            case Failure(exception) =>
+              ctx.log.error(exception.getMessage)
+              WrappedRandomException
+          }
         }
       }
-    }
 
-    def randomCookingTime(timeRange: (Double, Double)): Double = (timeRange._2 - timeRange._1) * Random.nextDouble() + timeRange._1
-
-    msg match {
-      case TakeOrder(order, replyTo, waiter, customer) =>
-        if (state == Free) {
-          val newState = Cooking
-          ctx.log.info(s"Started cooking order ${order.orderId}: ${order.dishes.toString}")
-          replyTo ! Result.Ok
-          val cookingTime = decideOnCookingTime(order)
-          ctx.scheduleOnce(cookingTime.seconds, ctx.self, FinishOrder(order.orderId, waiter, customer))
-          withState(newState)
-        } else {
-          ctx.log.info(s"Cannot start order ${order.orderId}, busy with other order")
-          replyTo ! Result.Busy
+      Behaviors.receiveMessage {
+        case TakeOrder(order, replyTo, waiter, customer) =>
+          if (state == Free) {
+            val newState = Cooking
+            ctx.log.info(s"Started cooking order ${order.orderId}: ${order.dishes.toString}")
+            replyTo ! Result.Ok
+            decideOnCookingTime(order, 0, waiter, customer)
+            withState(newState, random, config)
+          } else {
+            ctx.log.info(s"Cannot start order ${order.orderId}, busy with other order")
+            replyTo ! Result.Busy
+            Behaviors.same
+          }
+        case FinishOrder(orderId, waiter, customer) =>
+          val newState = Free
+          ctx.log.info(s"Order $orderId is finished")
+          waiter ! ServeOrder(orderId, customer)
+          withState(newState, random, config)
+        case WrappedRandomResponse(totalCookTime, order, waiter, customer) =>
+          if (order.dishes.nonEmpty)
+            decideOnCookingTime(order, totalCookTime, waiter, customer)
+          else
+            ctx.scheduleOnce(totalCookTime.seconds, ctx.self, FinishOrder(order.orderId, waiter, customer))
           Behaviors.same
-        }
-      case FinishOrder(orderId, waiter, customer) =>
-        val newState = Free
-        ctx.log.info(s"Order $orderId is finished")
-        waiter ! ServeOrder(orderId, customer)
-        withState(newState)
+        case _ => Behaviors.same
+      }
     }
-  }
 
 }

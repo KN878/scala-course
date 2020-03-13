@@ -21,13 +21,14 @@ object Waiter {
   final case class RestartQueryingChef(order: Order, customer: ActorRef[Customer.Eat.type]) extends Command
 
   private final case class WrappedResultResponse(
-                                                  result: Result,
-                                                  order: Order,
-                                                  customer: ActorRef[Customer.Eat.type],
-                                                  nonAskedChefs: Seq[ActorRef[Chef.Command]]
-                                                ) extends Command
+      result: Result,
+      order: Order,
+      customer: ActorRef[Customer.Eat.type],
+      nonAskedChefs: Seq[ActorRef[Chef.Command]]
+  ) extends Command
 
   implicit val timeout: Timeout = Timeout(1.second)
+  private val chefQueryTimeout = 3.seconds
 
   def apply(): Behavior[Command] = start
 
@@ -39,17 +40,16 @@ object Waiter {
 
   def processOrder(chefs: Seq[ActorRef[Chef.Command]], prevOrderId: Int): Behavior[Command] = Behaviors.receive {
     (ctx, msg) =>
-
       def queryChef(
-                     ctx: ActorContext[Command],
-                     order: Order,
-                     nonAskedChefs: Seq[ActorRef[Chef.Command]],
-                     customer: ActorRef[Customer.Eat.type]
-                   ): Unit = {
-        ctx.log.info(s"Asking chef ${nonAskedChefs.head.path.toString} to take order ${order.orderId}: ${order.dishes}")
+          ctx: ActorContext[Command],
+          order: Order,
+          nonAskedChefs: Seq[ActorRef[Chef.Command]],
+          customer: ActorRef[Customer.Eat.type]
+      ): Unit = {
+        //ctx.log.info(s"Asking chef ${nonAskedChefs.head.path.toString} to take order ${order.orderId}: ${order.dishes}")
         ctx.ask(nonAskedChefs.head, (ref: ActorRef[Result]) => Chef.TakeOrder(order, ref, ctx.self, customer)) {
           case Success(result) => WrappedResultResponse(result, order, customer, nonAskedChefs.tail)
-          case Failure(_) => WrappedResultResponse(Result.Busy, order, customer, nonAskedChefs.tail)
+          case Failure(_)      => WrappedResultResponse(Result.Busy, order, customer, nonAskedChefs.tail)
         }
       }
 
@@ -60,7 +60,7 @@ object Waiter {
           queryChef(ctx, wrappedOrder, chefs, customer)
           processOrder(chefs, prevOrderId + 1)
         case RestartQueryingChef(order, customer) =>
-          ctx.log.info(s"Restarting seek for order ${order.orderId} : ${order.dishes.toString}")
+          ctx.log.info(s"Restarting query a chef for order ${order.orderId} : ${order.dishes.toString}")
           queryChef(ctx, order, chefs, customer)
           Behaviors.same
         case WrappedResultResponse(result, order, customer, nonAskedChefs) =>
@@ -74,7 +74,7 @@ object Waiter {
                 Behaviors.same
               } else {
                 ctx.log.info(s"All chefs are busy, asking again")
-                ctx.self ! RestartQueryingChef(order, customer)
+                ctx.scheduleOnce(chefQueryTimeout, ctx.self, RestartQueryingChef(order, customer))
                 Behaviors.same
               }
           }

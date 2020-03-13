@@ -1,49 +1,59 @@
 package nikita.kalinskiy
 
-import akka.actor.testkit.typed.Effect.Scheduled
-import akka.actor.testkit.typed.scaladsl.{BehaviorTestKit, TestInbox}
-import nikita.kalinskiy.Chef.FinishOrder
+import akka.actor.testkit.typed.FishingOutcome
+import akka.actor.testkit.typed.scaladsl.ActorTestKit
+import akka.actor.typed.scaladsl.Behaviors
+import nikita.kalinskiy.Chef.{Cooking, FinishOrder, Free}
 import nikita.kalinskiy.Stuffing.{Beef, Mutton}
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+
+import scala.concurrent.duration._
 
 class ChefSpec extends AnyFlatSpec with Matchers {
 
   import ChefSpec._
 
   "Chef" should "take order if not cooking at the moment" in {
-    val testKit = BehaviorTestKit(Chef())
-    val inboxResult = TestInbox[Result]("Result")
-    val inboxWaiter = TestInbox[Waiter.Command]("Waiter")
-    val inboxCustomer = TestInbox[Customer.Eat.type]("Customer")
-    testKit.run(Chef.TakeOrder(orders.head, inboxResult.ref, inboxWaiter.ref, inboxCustomer.ref))
-    inboxResult.expectMessage(Result.Ok)
+    val testKit       = ActorTestKit()
+    val randomProbe   = testKit.createTestProbe[RandomGenerator.Command]("Random")
+    val resultProbe   = testKit.createTestProbe[Result]("Result")
+    val waiterProbe   = testKit.createTestProbe[Waiter.Command]("Waiter")
+    val customerProbe = testKit.createTestProbe[Customer.Eat.type]("Customer")
+    val chef          = testKit.spawn(Chef(randomProbe.ref, config))
+    chef ! Chef.TakeOrder(orders.head, resultProbe.ref, waiterProbe.ref, customerProbe.ref)
+    resultProbe.expectMessage(Result.Ok)
   }
 
   "Chef" should "not take order if cooking at the moment" in {
-    val testKit = BehaviorTestKit(Chef.withState(Chef.Cooking))
-    val inboxResult = TestInbox[Result]("Result")
-    val inboxWaiter = TestInbox[Waiter.Command]("Waiter")
-    val inboxCustomer = TestInbox[Customer.Eat.type]("Customer")
-    testKit.run(Chef.TakeOrder(orders.head, inboxResult.ref, inboxWaiter.ref, inboxCustomer.ref))
-    inboxResult.expectMessage(Result.Busy)
+    val testKit       = ActorTestKit()
+    val randomProbe   = testKit.createTestProbe[RandomGenerator.Command]("Random")
+    val resultProbe   = testKit.createTestProbe[Result]("Result")
+    val waiterProbe   = testKit.createTestProbe[Waiter.Command]("Waiter")
+    val customerProbe = testKit.createTestProbe[Customer.Eat.type]("Customer")
+    val chef          = testKit.spawn(Chef.withState(Cooking, randomProbe.ref, config))
+    chef ! Chef.TakeOrder(orders.head, resultProbe.ref, waiterProbe.ref, customerProbe.ref)
+    resultProbe.expectMessage(Result.Busy)
   }
 
   "Chef" should "return an order when it is cooked" in {
-    val testKit = BehaviorTestKit(Chef())
-    val inboxResultRef = TestInbox[Result]("Result").ref
-    val inboxWaiterRef = TestInbox[Waiter.Command]("Waiter").ref
-    val inboxCustomerRef = TestInbox[Customer.Eat.type]("Customer").ref
-    testKit.run(Chef.TakeOrder(orders.head, inboxResultRef, inboxWaiterRef, inboxCustomerRef))
-    val isOrderFinished = testKit.expectEffectPF {
-      case Scheduled(_, chefRef, FinishOrder(orderId, inboxWaiterRef, inboxCustomerRef)) =>
-        true
-      case _ => false
+    val testKit       = ActorTestKit()
+    val random        = testKit.spawn(RandomGenerator(123))
+    val resultProbe   = testKit.createTestProbe[Result]("Result")
+    val waiterProbe   = testKit.createTestProbe[Waiter.Command]("Waiter")
+    val customerProbe = testKit.createTestProbe[Customer.Eat.type]("Customer")
+    val chefProbe     = testKit.createTestProbe[Chef.Command]("Chef")
+    val chef          = testKit.spawn(Behaviors.monitor(chefProbe.ref, Chef.withState(Free, random, config)))
+    chef ! Chef.TakeOrder(orders.head, resultProbe.ref, waiterProbe.ref, customerProbe.ref)
+    chefProbe.fishForMessage(5.seconds) {
+      case FinishOrder(orderId, inboxWaiterRef, inboxCustomerRef) =>
+        FishingOutcome.Complete
+      case _ => FishingOutcome.Continue
     }
-    isOrderFinished shouldBe true
   }
 }
 
 object ChefSpec {
   val orders = List(Order(0, List(Khinkali(Beef, 2))), Order(1, List(Khinkali(Mutton, 2))))
+  val config = ChefConfig()
 }

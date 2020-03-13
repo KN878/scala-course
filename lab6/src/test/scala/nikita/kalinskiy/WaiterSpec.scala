@@ -18,28 +18,29 @@ class WaiterSpec extends AnyFlatSpec with Matchers {
 
   implicit val timeout: Timeout = Timeout(1.second)
 
-
   "Waiter" should "query an order to chef when receives one" in {
-    val testKit = ActorTestKit()
-    val chefProbe1 = testKit.createTestProbe[Chef.Command]("Chef1")
+    val testKit     = ActorTestKit()
+    val randomProbe = testKit.createTestProbe[RandomGenerator.Command]("Random")
+    val chefProbe1  = testKit.createTestProbe[Chef.Command]("Chef1")
     val mockedChef1 = testKit.spawn(Behaviors.monitor(chefProbe1.ref, mockedChefOkBehavior))
 
-    val waiter = testKit.spawn(Waiter.processOrder(List(mockedChef1), 0), "Waiter")
-    val customer = testKit.spawn(Customer.leaveOrder(waiter))
+    val waiter   = testKit.spawn(Waiter.processOrder(List(mockedChef1), 0), "Waiter")
+    val customer = testKit.spawn(Customer.leaveOrder(waiter, randomProbe.ref, CustomerConfig()))
     waiter ! Waiter.TakeOrder(order, customer)
 
     chefProbe1.expectMessageType[Chef.TakeOrder]
   }
 
   "Waiter" should "query another chef if previous chefs are busy" in {
-    val testKit = ActorTestKit()
-    val chefProbe1 = testKit.createTestProbe[Chef.Command]("Chef1")
-    val chefProbe2 = testKit.createTestProbe[Chef.Command]("Chef2")
+    val testKit     = ActorTestKit()
+    val randomProbe = testKit.createTestProbe[RandomGenerator.Command]("Random")
+    val chefProbe1  = testKit.createTestProbe[Chef.Command]("Chef1")
+    val chefProbe2  = testKit.createTestProbe[Chef.Command]("Chef2")
     val mockedChef1 = testKit.spawn(Behaviors.monitor(chefProbe1.ref, mockedChefBusyBehavior))
     val mockedChef2 = testKit.spawn(Behaviors.monitor(chefProbe2.ref, mockedChefOkBehavior))
 
-    val waiter = testKit.spawn(Waiter.processOrder(List(mockedChef1, mockedChef2), 0), "Waiter")
-    val customer = testKit.spawn(Customer.leaveOrder(waiter))
+    val waiter   = testKit.spawn(Waiter.processOrder(List(mockedChef1, mockedChef2), 0), "Waiter")
+    val customer = testKit.spawn(Customer.leaveOrder(waiter, randomProbe.ref, CustomerConfig()))
     waiter ! Waiter.TakeOrder(order, customer)
 
     chefProbe1.expectMessageType[Chef.TakeOrder]
@@ -47,27 +48,29 @@ class WaiterSpec extends AnyFlatSpec with Matchers {
   }
 
   "Waiter" should "restart querying chefs if all of them are busy now" in {
-    val testKit = ActorTestKit()
-    val chefProbe1 = testKit.createTestProbe[Chef.Command]("Chef1")
-    val chefProbe2 = testKit.createTestProbe[Chef.Command]("Chef2")
+    val testKit     = ActorTestKit()
+    val randomProbe = testKit.createTestProbe[RandomGenerator.Command]("Random")
+    val chefProbe1  = testKit.createTestProbe[Chef.Command]("Chef1")
+    val chefProbe2  = testKit.createTestProbe[Chef.Command]("Chef2")
     val mockedChef1 = testKit.spawn(Behaviors.monitor(chefProbe1.ref, mockedChefBusyBehavior))
     val mockedChef2 = testKit.spawn(Behaviors.monitor(chefProbe2.ref, mockedChefBusyBehavior))
 
     val waiterProbe = testKit.createTestProbe[Waiter.Command]("Waiter")
-    val waiter = testKit.spawn(Behaviors.monitor(waiterProbe.ref, Waiter.processOrder(List(mockedChef1, mockedChef2), 0)))
-    val customer = testKit.spawn(Customer.leaveOrder(waiter))
+    val waiter =
+      testKit.spawn(Behaviors.monitor(waiterProbe.ref, Waiter.processOrder(List(mockedChef1, mockedChef2), 0)))
+    val customer = testKit.spawn(Customer.leaveOrder(waiter, randomProbe.ref, CustomerConfig()))
     waiter ! Waiter.TakeOrder(order, customer)
 
     chefProbe1.expectMessageType[Chef.TakeOrder]
     chefProbe2.expectMessageType[Chef.TakeOrder]
-    waiterProbe.fishForMessage(1.second) {
+    waiterProbe.fishForMessage(7.second) {
       case RestartQueryingChef(_, _) => FishingOutcome.Complete
-      case _ => FishingOutcome.Continue
+      case _                         => FishingOutcome.Continue
     }
   }
 
   "Waiter" should "serve order to customer when order is finished" in {
-    val testKit = BehaviorTestKit(Waiter.processOrder(Nil, 0), "Waiter")
+    val testKit  = BehaviorTestKit(Waiter.processOrder(Nil, 0), "Waiter")
     val customer = TestInbox[Customer.Eat.type]("Customer")
     testKit.run(Waiter.ServeOrder(1, customer.ref))
     customer.expectMessage(Customer.Eat)
