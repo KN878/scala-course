@@ -1,9 +1,13 @@
 package dogs
 
-object OrdIntSpec extends EqualityProperties[Int]("intOrd") {
-  override def instance: Equality[Int] = Ord[Int]
+object OrdIntSpec extends OrderProperties[Int]("intOrd") {
+  override def instance: Ord[Int] = Ord[Int]
 }
 
-object OrdLongSpec extends EqualityProperties[Long]("longOrd") {
-  override def instance: Equality[Long] = Ord[Long]
+object OrdLongSpec extends OrderProperties[Long]("longOrd") {
+  override def instance: Ord[Long] = Ord[Long]
+}
+
+object OrdStringSpec extends EqualityProperties[String]("stringOrd") {
+  override def instance: Equality[String] = Ord[String]
 }

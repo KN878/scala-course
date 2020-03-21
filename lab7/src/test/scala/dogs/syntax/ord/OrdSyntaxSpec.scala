@@ -19,7 +19,7 @@ class OrdSyntaxSpec extends AnyFlatSpec with Matchers {
   }
 
   it should "work for wrapped floats" in {
-    Wrap(1.0f) is Wrap(1.0F) shouldBe true
+    Wrap(1.0f) is Wrap(1.0f) shouldBe true
     Wrap(Float.NaN) is Wrap(Float.NaN) shouldBe false
   }
 

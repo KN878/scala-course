@@ -20,8 +20,8 @@ object OrdResult {
 
   private[dogs] def fromInt(res: Int): OrdResult = res match {
     case i if i < 0 => OrdResult.Less
-    case 0 => OrdResult.Equal
-    case _ => OrdResult.Greater
+    case 0          => OrdResult.Equal
+    case _          => OrdResult.Greater
   }
 
 }
@@ -34,7 +34,7 @@ object PartialEquality {
   def apply[T](implicit instance: PartialEquality[T]): PartialEquality[T] = instance
 
   implicit val doublePartialEquality: PartialEquality[Double] = PartialOrd.doublePartialOrd
-  implicit val floatPartialEquality: PartialEquality[Float] = PartialOrd.floatPartialOrd
+  implicit val floatPartialEquality: PartialEquality[Float]   = PartialOrd.floatPartialOrd
 }
 
 trait Equality[-T] extends PartialEquality[T]
@@ -69,6 +69,7 @@ trait Ord[-T] extends PartialOrd[T] with Equality[T] {
 object Ord {
   def apply[T](implicit instance: Ord[T]): Ord[T] = instance
 
-  implicit val intOrd: Ord[Int] = (left, right) => OrdResult.fromInt(left.compareTo(right))
+  implicit val intOrd: Ord[Int]   = (left, right) => OrdResult.fromInt(left.compareTo(right))
   implicit val longOrd: Ord[Long] = (left, right) => OrdResult.fromInt(left.compareTo(right))
+  implicit val stringOrd: Ord[String] = (left, right) => OrdResult.fromInt(left.compareTo(right))
 }
